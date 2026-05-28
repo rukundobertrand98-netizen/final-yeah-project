@@ -10,6 +10,7 @@ use App\Models\Complaint;
 use App\Models\Payment;
 use App\Models\Schedule;
 use App\Models\User;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -216,7 +217,7 @@ class AdminWebController extends Controller
         $complaint->update([
             ...$data,
             'status' => 'resolved',
-            'handled_by' => auth()->id(),
+            'handled_by' => Auth::id(),
             'resolved_at' => now(),
         ]);
 

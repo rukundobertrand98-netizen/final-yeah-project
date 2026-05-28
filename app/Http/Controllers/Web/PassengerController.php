@@ -13,6 +13,7 @@ use App\Services\MtnMomoService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\View\View;
 use InvalidArgumentException;
 
@@ -20,13 +21,13 @@ class PassengerController extends Controller
 {
     public function dashboard(): View
     {
-        $bookings = auth()->user()->bookings()
+        $bookings = Auth::user()->bookings()
             ->with(['ticket', 'schedule.route', 'originStop', 'destinationStop'])
             ->latest()
             ->limit(5)
             ->get();
 
-        $alerts = PassengerAlert::where('user_id', auth()->id())
+        $alerts = PassengerAlert::where('user_id', Auth::id())
             ->where('is_read', false)
             ->latest()
             ->limit(5)
@@ -76,7 +77,7 @@ class PassengerController extends Controller
                 ->whereIn('status', ['scheduled', 'boarding'])
                 ->orderBy('departure_time')
                 ->get()
-                ->filter(function (Schedule $schedule) use ($selectedOrigin, $selectedDestination) {
+                ->filter(function (Schedule $schedule) use ($selectedOrigin, $selectedDestination, $requestedSeats) {
                     $origin = $schedule->route->stops->firstWhere('id', $selectedOrigin);
                     $destination = $schedule->route->stops->firstWhere('id', $selectedDestination);
 
@@ -232,7 +233,7 @@ class PassengerController extends Controller
 
     public function bookings(): View
     {
-        $bookings = auth()->user()->bookings()
+        $bookings = Auth::user()->bookings()
             ->with([
                 'ticket',
                 'payment',
@@ -252,7 +253,7 @@ class PassengerController extends Controller
 
     protected function authorizeBooking(Booking $booking): void
     {
-        if ($booking->user_id !== auth()->id()) {
+        if ($booking->user_id !== Auth::id()) {
             abort(403);
         }
     }
