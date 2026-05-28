@@ -47,8 +47,13 @@ Route::middleware(['auth', 'role:operator'])->prefix('operator')->name('operator
     Route::post('/buses', [OperatorWebController::class, 'storeBus'])->name('buses.store');
     Route::get('/routes', [OperatorWebController::class, 'routes'])->name('routes');
     Route::post('/routes', [OperatorWebController::class, 'storeRoute'])->name('routes.store');
+    Route::get('/routes/{route}/edit', [OperatorWebController::class, 'editRoute'])->name('routes.edit');
+    Route::put('/routes/{route}', [OperatorWebController::class, 'updateRoute'])->name('routes.update');
+    Route::delete('/routes/{route}', [OperatorWebController::class, 'deleteRoute'])->name('routes.delete');
     Route::get('/schedules', [OperatorWebController::class, 'schedules'])->name('schedules');
     Route::post('/schedules', [OperatorWebController::class, 'storeSchedule'])->name('schedules.store');
+    Route::put('/schedules/{schedule}', [OperatorWebController::class, 'updateSchedule'])->name('schedules.update');
+    Route::delete('/schedules/{schedule}', [OperatorWebController::class, 'deleteSchedule'])->name('schedules.delete');
     Route::get('/bookings', [OperatorWebController::class, 'bookings'])->name('bookings');
     Route::get('/payments', [OperatorWebController::class, 'payments'])->name('payments');
     Route::get('/passengers', [OperatorWebController::class, 'passengers'])->name('passengers');

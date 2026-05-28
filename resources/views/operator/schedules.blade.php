@@ -29,16 +29,41 @@
     </form>
 </div>
 <table class="kbs-table kbs-card">
-    <thead><tr><th>Date</th><th>Route</th><th>Bus</th><th>Driver</th><th>Price</th><th>Status</th></tr></thead>
+    <thead><tr><th>Date</th><th>Route</th><th>Bus</th><th>Driver</th><th>Price</th><th>Status</th><th>Actions</th></tr></thead>
     <tbody>
     @foreach($schedules as $s)
-        <tr>
+        <tr id="schedule-{{ $s->id }}">
             <td>{{ $s->travel_date->format('d/m/Y') }}</td>
             <td>{{ $s->route->name }}</td>
             <td>{{ $s->bus->plate_number }}</td>
             <td>{{ $s->driver?->name ?? '—' }}</td>
             <td>{{ number_format($s->price) }}</td>
-            <td>{{ $s->status }}</td>
+            <td><span class="kbs-badge kbs-badge-{{ $s->status === 'completed' ? 'success' : ($s->status === 'cancelled' ? 'warning' : 'info') }}">{{ ucfirst(str_replace('_', ' ', $s->status)) }}</span></td>
+            <td style="white-space:nowrap">
+                <button type="button" class="kbs-btn kbs-btn-ghost" style="padding:.25rem .5rem;font-size:.8rem" onclick="document.getElementById('edit-{{ $s->id }}').hidden = !document.getElementById('edit-{{ $s->id }}').hidden">Edit</button>
+                <form method="POST" action="{{ route('operator.schedules.delete', $s) }}" style="display:inline" onsubmit="return confirm('Delete this schedule?')">
+                    @csrf @method('DELETE')
+                    <button class="kbs-btn kbs-btn-ghost" style="padding:.25rem .5rem;font-size:.8rem;color:#c0392b">Del</button>
+                </form>
+            </td>
+        </tr>
+        <tr id="edit-{{ $s->id }}" hidden>
+            <td colspan="7" style="background:var(--kbs-bg);padding:.75rem">
+                <form method="POST" action="{{ route('operator.schedules.update', $s) }}" class="kbs-form">
+                    @csrf @method('PUT')
+                    <div class="kbs-grid kbs-grid-3" style="gap:.5rem">
+                        <div><label>Route</label><select name="route_id">@foreach($routes as $r)<option value="{{ $r->id }}" @selected($s->route_id === $r->id)>{{ $r->name }}</option>@endforeach</select></div>
+                        <div><label>Bus</label><select name="bus_id">@foreach($buses as $b)<option value="{{ $b->id }}" @selected($s->bus_id === $b->id)>{{ $b->plate_number }}</option>@endforeach</select></div>
+                        <div><label>Driver</label><select name="driver_id"><option value="">—</option>@foreach($drivers as $d)<option value="{{ $d->id }}" @selected($s->driver_id === $d->id)>{{ $d->name }}</option>@endforeach</select></div>
+                        <div><label>Date</label><input type="date" name="travel_date" value="{{ $s->travel_date->format('Y-m-d') }}" required></div>
+                        <div><label>Departure</label><input type="time" name="departure_time" value="{{ $s->departure_time }}" required></div>
+                        <div><label>Arrival</label><input type="time" name="arrival_time" value="{{ $s->arrival_time }}"></div>
+                        <div><label>Price (RWF)</label><input type="number" name="price" value="{{ (int) $s->price }}" required min="100"></div>
+                        <div><label>Status</label><select name="status">@foreach(['scheduled','boarding','in_progress','delayed','completed','cancelled'] as $st)<option value="{{ $st }}" @selected($s->status === $st)>{{ ucfirst(str_replace('_', ' ', $st)) }}</option>@endforeach</select></div>
+                    </div>
+                    <button class="kbs-btn kbs-btn-primary" style="margin-top:.5rem">Save Changes</button>
+                </form>
+            </td>
         </tr>
     @endforeach
     </tbody>

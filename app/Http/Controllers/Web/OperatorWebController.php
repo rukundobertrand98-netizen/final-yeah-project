@@ -85,7 +85,11 @@ class OperatorWebController extends Controller
 
     public function routes(): View
     {
-        $routes = Route::with(['originStop', 'destinationStop', 'stops'])->where('operator_id', auth()->id())->get();
+        $routes = Route::with(['originStop', 'destinationStop', 'stops'])
+            ->where('operator_id', auth()->id())
+            ->orderByDesc('is_active')
+            ->latest()
+            ->get();
 
         return view('operator.routes', compact('routes'));
     }
@@ -172,6 +176,161 @@ class OperatorWebController extends Controller
         }
 
         return $code;
+    }
+
+    public function editRoute(Route $route): View
+    {
+        if ($route->operator_id !== auth()->id()) {
+            abort(403);
+        }
+
+        $route->load(['stops' => fn ($q) => $q->orderBy('route_stops.sequence')]);
+        $buses = Bus::where('operator_id', auth()->id())->get();
+        $drivers = User::where('role', UserRole::Driver->value)->get();
+        $schedules = Schedule::with(['bus', 'driver'])
+            ->where('route_id', $route->id)
+            ->where('operator_id', auth()->id())
+            ->latest('travel_date')
+            ->get();
+
+        return view('operator.route-edit', compact('route', 'buses', 'drivers', 'schedules'));
+    }
+
+    public function updateRoute(Request $request, Route $route): RedirectResponse
+    {
+        if ($route->operator_id !== auth()->id()) {
+            abort(403);
+        }
+
+        $data = $request->validate([
+            'name' => ['required'],
+            'code' => ['required', 'unique:routes,code,'.$route->id],
+            'base_price' => ['required', 'numeric', 'min:100'],
+            'estimated_duration_minutes' => ['required', 'integer', 'min:1'],
+            'is_active' => ['nullable'],
+            'route_stops' => ['required', 'array', 'min:2'],
+            'route_stops.*.name' => ['required', 'string', 'max:255'],
+            'route_stops.*.code' => ['nullable', 'string', 'max:20'],
+            'route_stops.*.district' => ['nullable', 'string', 'max:255'],
+            'route_stops.*.latitude' => ['required', 'numeric', 'between:-90,90'],
+            'route_stops.*.longitude' => ['required', 'numeric', 'between:-180,180'],
+        ]);
+
+        $usedCodes = [];
+
+        $stopModels = collect($data['route_stops'])->map(function (array $stop) use (&$usedCodes) {
+            $submittedCode = strtoupper(trim((string) ($stop['code'] ?? '')));
+            $code = $submittedCode && ! in_array($submittedCode, $usedCodes, true)
+                ? $submittedCode
+                : $this->makeStopCode($stop['name'], $usedCodes);
+
+            $usedCodes[] = strtoupper($code);
+
+            return Stop::updateOrCreate(
+                ['code' => strtoupper($code)],
+                [
+                    'name' => $stop['name'],
+                    'district' => ($stop['district'] ?? null) ?: 'Kigali',
+                    'latitude' => $stop['latitude'],
+                    'longitude' => $stop['longitude'],
+                    'is_active' => true,
+                ]
+            );
+        })->values();
+
+        if ($stopModels->pluck('id')->unique()->count() < 2) {
+            return back()->withErrors(['route_stops' => 'Enter at least two different bus stops for this route.'])->withInput();
+        }
+
+        if ($stopModels->pluck('id')->unique()->count() !== $stopModels->count()) {
+            return back()->withErrors(['route_stops' => 'Each stop on a route must be different.'])->withInput();
+        }
+
+        $mapPath = $this->fetchOsrmRoadPath($stopModels);
+
+        $route->update([
+            'name' => $data['name'],
+            'code' => $data['code'],
+            'origin_stop_id' => $stopModels->first()->id,
+            'destination_stop_id' => $stopModels->last()->id,
+            'estimated_duration_minutes' => $data['estimated_duration_minutes'],
+            'base_price' => $data['base_price'],
+            'map_path' => $mapPath,
+            'is_active' => $request->has('is_active'),
+        ]);
+
+        $route->stops()->detach();
+        foreach ($stopModels as $i => $stop) {
+            $minutes = $stopModels->count() > 1
+                ? (int) round(($data['estimated_duration_minutes'] / ($stopModels->count() - 1)) * $i)
+                : 0;
+
+            $route->stops()->attach($stop->id, ['sequence' => $i + 1, 'minutes_from_start' => $minutes]);
+        }
+
+        return redirect()->route('operator.routes.edit', $route)->with('success', 'Route updated successfully.');
+    }
+
+    public function deleteRoute(Route $route): RedirectResponse
+    {
+        if ($route->operator_id !== auth()->id()) {
+            abort(403);
+        }
+
+        $hasBookings = Booking::whereHas('schedule', fn ($q) => $q->where('route_id', $route->id))->exists();
+
+        if ($hasBookings) {
+            $route->update(['is_active' => false]);
+
+            return redirect()->route('operator.routes')->with('success', 'Route deactivated (has existing bookings).');
+        }
+
+        $route->stops()->detach();
+        Schedule::where('route_id', $route->id)->delete();
+        $route->delete();
+
+        return redirect()->route('operator.routes')->with('success', 'Route deleted.');
+    }
+
+    public function updateSchedule(Request $request, Schedule $schedule): RedirectResponse
+    {
+        if ($schedule->operator_id !== auth()->id()) {
+            abort(403);
+        }
+
+        $data = $request->validate([
+            'route_id' => ['required', 'exists:routes,id'],
+            'bus_id' => ['required', 'exists:buses,id'],
+            'driver_id' => ['nullable', 'exists:users,id'],
+            'travel_date' => ['required', 'date'],
+            'departure_time' => ['required'],
+            'arrival_time' => ['nullable'],
+            'price' => ['required', 'numeric', 'min:100'],
+            'status' => ['required', 'in:scheduled,boarding,in_progress,delayed,completed,cancelled'],
+        ]);
+
+        $schedule->update($data);
+
+        return back()->with('success', 'Schedule updated.');
+    }
+
+    public function deleteSchedule(Schedule $schedule): RedirectResponse
+    {
+        if ($schedule->operator_id !== auth()->id()) {
+            abort(403);
+        }
+
+        $hasBookings = $schedule->bookings()->whereIn('status', ['confirmed', 'boarded'])->exists();
+
+        if ($hasBookings) {
+            return back()->withErrors(['schedule' => 'Cannot delete schedule with active bookings. Cancel or complete the bookings first.']);
+        }
+
+        $schedule->bookings()->where('status', 'pending')->delete();
+        $schedule->locations()->delete();
+        $schedule->delete();
+
+        return back()->with('success', 'Schedule deleted.');
     }
 
     protected function fetchOsrmRoadPath(\Illuminate\Support\Collection $stopModels): ?array
