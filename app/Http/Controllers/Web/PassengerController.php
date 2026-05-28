@@ -39,6 +39,21 @@ class PassengerController extends Controller
         return view('passenger.dashboard', compact('bookings', 'alerts'));
     }
 
+    public function alerts(): \Illuminate\Http\JsonResponse
+    {
+        $alerts = PassengerAlert::where('user_id', Auth::id())
+            ->where('is_read', false)
+            ->latest()
+            ->limit(10)
+            ->get();
+
+        PassengerAlert::where('user_id', Auth::id())
+            ->where('is_read', false)
+            ->update(['is_read' => true]);
+
+        return response()->json($alerts);
+    }
+
     public function search(Request $request): View
     {
         $stops = Stop::where('is_active', true)->orderBy('name')->get();
@@ -53,6 +68,7 @@ class PassengerController extends Controller
             'route_name' => $r->name,
             'coords' => $r->stops->map(fn($s) => [(float)$s->latitude, (float)$s->longitude])->values(),
             'stop_names' => $r->stops->pluck('name'),
+            'map_path' => $r->map_path,
         ]);
 
         if ($request->filled(['origin_stop_id', 'destination_stop_id'])) {

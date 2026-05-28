@@ -10,6 +10,7 @@
 
 @section('panel')
 <h1>Welcome, {{ auth()->user()->name }}</h1>
+<div id="alertsContainer">
 @if($alerts->count())
     <div class="kbs-card" style="margin:1rem 0;border-left:4px solid var(--kbs-accent)">
         <strong>Bus approaching your stop</strong>
@@ -18,6 +19,7 @@
         @endforeach
     </div>
 @endif
+</div>
 <h2>Recent Bookings</h2>
 <div class="kbs-card">
     <table class="kbs-table">
@@ -42,4 +44,32 @@
         </tbody>
     </table>
 </div>
+
+@push('scripts')
+<script>
+(function () {
+    const alertsUrl = @json(route('passenger.alerts'));
+    const container = document.getElementById('alertsContainer');
+
+    async function pollAlerts() {
+        try {
+            const res = await fetch(alertsUrl, { headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' } });
+            if (!res.ok) return;
+            const alerts = await res.json();
+            if (!alerts.length) return;
+
+            let html = '<div class="kbs-card" style="margin:1rem 0;border-left:4px solid var(--kbs-accent)">';
+            html += '<strong>Bus approaching your stop</strong>';
+            alerts.forEach(alert => {
+                html += `<p style="margin:.5rem 0">${alert.message}</p>`;
+            });
+            html += '</div>';
+            container.innerHTML = html;
+        } catch (e) {}
+    }
+
+    setInterval(pollAlerts, 15000);
+})();
+</script>
+@endpush
 @endsection

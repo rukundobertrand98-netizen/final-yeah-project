@@ -81,7 +81,22 @@
         box.innerHTML = html;
     }
 
-    function render(data) {
+    let cachedRoadPath = null;
+
+    async function fetchRoadPath(coords) {
+        if (!coords || coords.length < 2) return null;
+        try {
+            const coordinateText = coords.map(point => `${point[1]},${point[0]}`).join(';');
+            const response = await fetch(`https://router.project-osrm.org/route/v1/driving/${coordinateText}?overview=full&geometries=geojson`);
+            if (!response.ok) return null;
+            const data = await response.json();
+            return data.routes?.[0]?.geometry?.coordinates?.map(point => [point[1], point[0]]) || null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    async function render(data) {
         const center = data.bus
             ? [data.bus.latitude, data.bus.longitude]
             : [data.departure.latitude, data.departure.longitude];
@@ -95,12 +110,20 @@
         const orderedRouteStops = [...(data.route_stops || [])].sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
         const routePoints = orderedRouteStops.map(stop => [stop.latitude, stop.longitude]);
         if (routePoints.length > 1) {
-            layers.route = L.polyline(routePoints, {
+            let pathPoints = routePoints;
+            if (data.map_path && data.map_path.length > 1) {
+                pathPoints = data.map_path;
+            } else if (!cachedRoadPath) {
+                cachedRoadPath = await fetchRoadPath(routePoints);
+            }
+            if (cachedRoadPath) pathPoints = cachedRoadPath;
+
+            layers.route = L.polyline(pathPoints, {
                 color: '#f4b400',
                 weight: 5,
                 opacity: 0.85
             }).addTo(map);
-            layers.route.bindPopup('<b>Operator route path</b><br>This line follows the stops entered by the operator.');
+            layers.route.bindPopup('<b>Operator route path</b><br>This line follows the real bus road path through all stops.');
         }
 
         layers.destination = marker(data.destination.latitude, data.destination.longitude, {

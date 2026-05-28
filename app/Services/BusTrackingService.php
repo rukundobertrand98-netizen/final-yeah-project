@@ -131,6 +131,7 @@ class BusTrackingService
             'approaching_pickup' => $approachingPickup,
             'estimated_arrival_minutes' => $estimatedArrivalMinutes,
             'proximity_radius_km' => (float) config('kbs.tracking.proximity_radius_km', 0.5),
+            'map_path' => $schedule->route->map_path,
             'route_stops' => $routeStops,
         ];
     }

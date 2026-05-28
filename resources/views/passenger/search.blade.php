@@ -115,6 +115,7 @@
             <div class="kbs-card kbs-route-result"
                  data-route='@json($routeCoords)'
                  data-route-stop-names='@json($routeStopNames)'
+                 @if($schedule->route->map_path) data-map-path='@json($schedule->route->map_path)' @endif
                  style="cursor:pointer;transition:border-color .2s">
                 <div>
                     <strong>{{ $busName }}</strong><br>
@@ -206,7 +207,7 @@
     function previewRoute(index) {
         const preview = routePreviews[index];
         if (preview) {
-            drawSelectedLine(preview.coords, preview.stop_names);
+            drawSelectedLine(preview.coords, preview.stop_names, preview.map_path || null);
             document.getElementById('location-status').innerText = 
                 `Viewing Route: ${preview.route_name}. Select stops on map to set your trip.`;
         }
@@ -225,28 +226,53 @@
         map.closePopup();
     }
 
-    function drawSelectedLine(coords, stopNames = []) {
+    let routePathRequestId = 0;
+
+    async function fetchRoadPath(coords) {
+        if (!coords || coords.length < 2) return null;
+        try {
+            const coordinateText = coords.map(point => `${point[1]},${point[0]}`).join(';');
+            const response = await fetch(`https://router.project-osrm.org/route/v1/driving/${coordinateText}?overview=full&geometries=geojson`);
+            if (!response.ok) return null;
+            const data = await response.json();
+            return data.routes?.[0]?.geometry?.coordinates?.map(point => [point[1], point[0]]) || null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    async function drawSelectedLine(coords, stopNames = [], mapPath = null) {
         if (routeLine) routeLine.remove();
         
-        // If no specific coordinates provided, check if search results exist and use the first one
         if (!coords) {
             const firstResult = document.querySelector('.kbs-route-result');
             if (firstResult) {
                 coords = JSON.parse(firstResult.dataset.route);
+                mapPath = firstResult.dataset.mapPath ? JSON.parse(firstResult.dataset.mapPath) : null;
             }
         }
 
-        // Draw only route polyline passing through all intermediate stops.
-        // Never draw a direct straight line from origin to destination.
-        if (coords && coords.length >= 2) {
-            routeLine = L.polyline(coords, { color: '#0b5e3c', weight: 5, opacity: .75 }).addTo(map);
-            map.fitBounds(routeLine.getBounds(), { padding: [40, 40], maxZoom: 14 });
-            const msg = stopNames.length
-                ? `Route path: ${stopNames.join(' → ')}`
-                : 'Route path loaded through bus stops.';
-            document.getElementById('location-status').innerText = msg;
-        } else {
+        if (!coords || coords.length < 2) {
             document.getElementById('location-status').innerText = 'No valid route path found through bus stops for this selection.';
+            return;
+        }
+
+        const requestId = ++routePathRequestId;
+        routeLine = L.polyline(coords, { color: '#0b5e3c', weight: 5, opacity: .75 }).addTo(map);
+        map.fitBounds(routeLine.getBounds(), { padding: [40, 40], maxZoom: 14 });
+
+        const msg = stopNames.length
+            ? `Route path: ${stopNames.join(' → ')}`
+            : 'Route path loaded through bus stops.';
+        document.getElementById('location-status').innerText = msg;
+
+        let roadPath = mapPath;
+        if (!roadPath) {
+            roadPath = await fetchRoadPath(coords);
+        }
+        if (requestId === routePathRequestId && roadPath && roadPath.length > 1) {
+            routeLine.setLatLngs(roadPath);
+            map.fitBounds(routeLine.getBounds(), { padding: [40, 40], maxZoom: 14 });
         }
     }
 
@@ -271,7 +297,8 @@
         card.addEventListener('click', () => {
             drawSelectedLine(
                 JSON.parse(card.dataset.route),
-                JSON.parse(card.dataset.routeStopNames || '[]')
+                JSON.parse(card.dataset.routeStopNames || '[]'),
+                card.dataset.mapPath ? JSON.parse(card.dataset.mapPath) : null
             );
             document.querySelectorAll('.kbs-route-result').forEach(c => c.style.borderColor = '');
             card.style.borderColor = 'var(--kbs-primary)';
@@ -287,7 +314,8 @@
     if (firstRoute) {
         drawSelectedLine(
             JSON.parse(firstRoute.dataset.route),
-            JSON.parse(firstRoute.dataset.routeStopNames || '[]')
+            JSON.parse(firstRoute.dataset.routeStopNames || '[]'),
+            firstRoute.dataset.mapPath ? JSON.parse(firstRoute.dataset.mapPath) : null
         );
     } else if (routePreviews.length > 0) {
         drawSelectedLine(routePreviews[0].coords, routePreviews[0].stop_names || []);

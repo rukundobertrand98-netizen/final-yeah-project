@@ -36,6 +36,7 @@ Route::middleware(['auth', 'role:passenger'])->prefix('passenger')->name('passen
     Route::get('/track/{booking}', [PassengerController::class, 'track'])->name('track');
     Route::get('/track/{booking}/data', [PassengerController::class, 'trackData'])->name('track.data');
     Route::get('/bookings', [PassengerController::class, 'bookings'])->name('bookings');
+    Route::get('/alerts', [PassengerController::class, 'alerts'])->name('alerts');
     Route::get('/complaints/new', [ComplaintController::class, 'create'])->name('complaints.create');
     Route::post('/complaints', [ComplaintController::class, 'store'])->name('complaints.store');
 });

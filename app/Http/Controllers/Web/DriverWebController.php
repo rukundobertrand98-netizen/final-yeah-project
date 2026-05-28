@@ -89,7 +89,7 @@ class DriverWebController extends Controller
         return back()->with('success', 'Report submitted.');
     }
 
-    public function updateLocation(Request $request, Schedule $schedule, BusTrackingService $tracking): RedirectResponse
+    public function updateLocation(Request $request, Schedule $schedule, BusTrackingService $tracking): RedirectResponse|\Illuminate\Http\JsonResponse
     {
         $data = $request->validate([
             'latitude' => ['required', 'numeric'],
@@ -97,6 +97,10 @@ class DriverWebController extends Controller
         ]);
 
         $tracking->updateLocation($schedule, $data['latitude'], $data['longitude']);
+
+        if ($request->expectsJson()) {
+            return response()->json(['status' => 'ok']);
+        }
 
         return back()->with('success', 'Location updated.');
     }

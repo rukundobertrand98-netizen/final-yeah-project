@@ -14,6 +14,8 @@ use App\Models\User;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\View\View;
 
 class OperatorWebController extends Controller
@@ -133,10 +135,7 @@ class OperatorWebController extends Controller
             return back()->withErrors(['route_stops' => 'Each stop on a route must be different. Check for repeated stop codes or duplicate places.'])->withInput();
         }
 
-        $mapPath = $stopModels->map(fn (Stop $stop) => [
-            'lat' => (float) $stop->latitude,
-            'lng' => (float) $stop->longitude,
-        ])->values()->all();
+        $mapPath = $this->fetchOsrmRoadPath($stopModels);
 
         $route = Route::create([
             'operator_id' => auth()->id(),
@@ -173,6 +172,33 @@ class OperatorWebController extends Controller
         }
 
         return $code;
+    }
+
+    protected function fetchOsrmRoadPath(\Illuminate\Support\Collection $stopModels): ?array
+    {
+        if ($stopModels->count() < 2) {
+            return null;
+        }
+
+        $coordinates = $stopModels->map(fn (Stop $stop) => $stop->longitude . ',' . $stop->latitude)->implode(';');
+
+        try {
+            $response = Http::timeout(10)->get("https://router.project-osrm.org/route/v1/driving/{$coordinates}", [
+                'overview' => 'full',
+                'geometries' => 'geojson',
+            ]);
+
+            if ($response->successful()) {
+                $geometry = $response->json('routes.0.geometry.coordinates');
+                if (is_array($geometry) && count($geometry) > 1) {
+                    return array_map(fn (array $point) => [$point[1], $point[0]], $geometry);
+                }
+            }
+        } catch (\Throwable $e) {
+            Log::warning('OSRM road path fetch failed', ['error' => $e->getMessage()]);
+        }
+
+        return null;
     }
 
     public function schedules(): View
