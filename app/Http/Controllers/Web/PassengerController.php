@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Web;
 
 use App\Http\Controllers\Controller;
 use App\Models\Booking;
+use App\Models\User;
 use App\Models\PassengerAlert;
 use App\Models\Schedule;
 use App\Models\Stop;
@@ -21,7 +22,9 @@ class PassengerController extends Controller
 {
     public function dashboard(): View
     {
-        $bookings = Auth::user()->bookings()
+        /** @var User $user */
+        $user = Auth::user();
+        $bookings = $user->bookings()
             ->with(['ticket', 'schedule.route', 'originStop', 'destinationStop'])
             ->latest()
             ->limit(5)
@@ -233,7 +236,9 @@ class PassengerController extends Controller
 
     public function bookings(): View
     {
-        $bookings = Auth::user()->bookings()
+        /** @var User $user */
+        $user = Auth::user();
+        $bookings = $user->bookings()
             ->with([
                 'ticket',
                 'payment',
