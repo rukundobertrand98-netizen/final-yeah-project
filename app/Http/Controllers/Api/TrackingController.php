@@ -7,6 +7,7 @@ use App\Models\Booking;
 use App\Models\PassengerAlert;
 use App\Models\Schedule;
 use App\Services\BusTrackingService;
+use App\Services\NearbyBusService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -52,5 +53,18 @@ class TrackingController extends Controller
         $alert->update(['is_read' => true]);
 
         return response()->json($alert);
+    }
+
+    public function nearbyBuses(Request $request, NearbyBusService $nearby): JsonResponse
+    {
+        $data = $request->validate([
+            'latitude' => ['required', 'numeric'],
+            'longitude' => ['required', 'numeric'],
+        ]);
+
+        return response()->json($nearby->busesNearPassenger(
+            (float) $data['latitude'],
+            (float) $data['longitude']
+        ));
     }
 }

@@ -18,7 +18,7 @@ class BusTrackingService
         ?float $speed = null,
         ?int $heading = null
     ): BusLocation {
-        $nearest = $this->findNearestStop($latitude, $longitude);
+        $nearest = $this->findNearestStop($latitude, $longitude, $schedule->route_id);
 
         $location = BusLocation::create([
             'schedule_id' => $schedule->id,
@@ -82,24 +82,25 @@ class BusTrackingService
             ? max(1, (int) round(($distanceToDepartureKm / max((float) ($bus->speed_kmh ?: 25), 10)) * 60))
             : null;
 
-        $routeStops = $schedule->route->stops
-            ->sortBy(fn (Stop $stop) => (int) $stop->pivot->sequence)
-            ->values()
+        $routeStops = $schedule->orderedStopsForLeg()
             ->map(fn (Stop $stop) => [
             'id' => $stop->id,
             'name' => $stop->name,
             'code' => $stop->code,
             'latitude' => (float) $stop->latitude,
             'longitude' => (float) $stop->longitude,
-            'sequence' => (int) $stop->pivot->sequence,
+            'sequence' => $schedule->stopOrderIndex($stop->id),
             'is_departure' => $stop->id === $departure->id,
             'is_destination' => $stop->id === $destination->id,
         ])->values();
 
         return [
             'booking_reference' => $booking->reference,
-            'route_name' => $schedule->route->name,
+            'route_name' => $schedule->displayRouteName(),
             'trip_status' => $schedule->status,
+            'live_status' => $schedule->liveStatusLabel(),
+            'leg_direction' => $schedule->leg_direction,
+            'leg_number' => $schedule->leg_number,
             'departure' => [
                 'id' => $departure->id,
                 'name' => $departure->name,
@@ -133,6 +134,22 @@ class BusTrackingService
             'proximity_radius_km' => (float) config('kbs.tracking.proximity_radius_km', 0.5),
             'map_path' => $schedule->route->map_path,
             'route_stops' => $routeStops,
+            'passenger_location' => $booking->user_id ? (function () use ($booking) {
+                $loc = \App\Models\PassengerLocation::where('user_id', $booking->user_id)
+                    ->where('is_active', true)
+                    ->latest('location_time')
+                    ->first();
+
+                if (! $loc) return null;
+
+                return [
+                    'latitude' => (float) $loc->latitude,
+                    'longitude' => (float) $loc->longitude,
+                    'last_updated' => $loc->location_time?->toIso8601String(),
+                    'accuracy' => $loc->accuracy,
+                    'address' => $loc->address,
+                ];
+            })() : null,
         ];
     }
 
@@ -144,6 +161,7 @@ class BusTrackingService
 
         $bookings = Booking::with('user')
             ->where('schedule_id', $schedule->id)
+            ->where('leg_number', $schedule->leg_number)
             ->where('origin_stop_id', $nearest->id)
             ->where('status', 'confirmed')
             ->get();

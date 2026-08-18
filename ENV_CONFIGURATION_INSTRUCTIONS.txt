@@ -1,0 +1,110 @@
+===============================================================================
+GOOGLE MAPS API KEY CONFIGURATION INSTRUCTIONS
+===============================================================================
+
+STEP 1: Open your .env file
+----------------------------
+Location: c:\xampp\htdocs\Online-bus-system\.env
+
+If you don't see a .env file:
+- Copy .env.example to .env
+- Command: copy .env.example .env
+
+
+STEP 2: Add your Google Maps API key
+-------------------------------------
+Find these lines in your .env file:
+
+# Google Maps API Keys
+GOOGLE_MAPS_API_KEY=
+GOOGLE_PLACES_API_KEY=
+
+Replace with your actual API key:
+
+# Google Maps API Keys
+GOOGLE_MAPS_API_KEY=AIzaSyBxxxxxxxxxxxxxxxxxxxxxxxxx
+GOOGLE_PLACES_API_KEY=
+
+NOTE: Only GOOGLE_MAPS_API_KEY is required. The system uses a single
+key for all Google Maps services.
+
+
+STEP 3: Clear configuration cache
+----------------------------------
+After editing .env, run this command:
+
+php artisan config:clear
+
+This ensures Laravel picks up the new configuration.
+
+
+STEP 4: Test the configuration
+-------------------------------
+1. Log in as Operator
+2. Go to Routes menu
+3. If configured correctly, you'll see:
+   - 3-step wizard interface
+   - Google Maps autocomplete
+   - Interactive map
+
+If not configured (no API key):
+   - You'll see the old interface (OpenStreetMap)
+   - This is expected and the system works fine
+
+
+SECURITY WARNING
+----------------
+⚠️ NEVER commit your .env file to version control!
+⚠️ NEVER share your API key publicly!
+⚠️ The .env file should always be in .gitignore
+
+
+TROUBLESHOOTING
+---------------
+
+Issue: "Map not loading"
+Solution:
+  - Verify GOOGLE_MAPS_API_KEY is set in .env
+  - Run: php artisan config:clear
+  - Check browser console (F12) for errors
+  - Verify API key is active in Google Cloud Console
+
+Issue: "This page can't load Google Maps correctly"
+Solution:
+  - Check billing is enabled in Google Cloud Console
+  - Verify all required APIs are enabled
+  - Check API key restrictions
+
+Issue: Still seeing old interface
+Solution:
+  - Clear Laravel cache: php artisan cache:clear
+  - Clear config: php artisan config:clear
+  - Restart web server
+  - Hard refresh browser (Ctrl+F5)
+
+
+WHERE TO GET API KEY
+--------------------
+1. Go to: https://console.cloud.google.com/
+2. Create new project
+3. Enable APIs (Maps JavaScript, Places, Directions, Geocoding)
+4. Create API Key
+5. Copy the key to your .env file
+
+
+COST INFORMATION
+----------------
+Free tier: $200/month credit
+Equivalent to:
+  - ~28,000 map loads
+  - ~40,000 place searches
+  - Sufficient for most operations
+
+Only charged if you exceed the free tier.
+
+
+===============================================================================
+For more detailed information, see:
+- GOOGLE_MAPS_SETUP.md
+- QUICK_START_CHECKLIST.md
+===============================================================================

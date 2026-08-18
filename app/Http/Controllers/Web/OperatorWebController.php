@@ -6,6 +6,7 @@ use App\Enums\UserRole;
 use App\Http\Controllers\Controller;
 use App\Models\Booking;
 use App\Models\Bus;
+use App\Models\BusStatusReport;
 use App\Models\Payment;
 use App\Models\Route;
 use App\Models\Schedule;
@@ -13,16 +14,21 @@ use App\Models\Stop;
 use App\Models\User;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Redirect;
 use Illuminate\View\View;
+use Illuminate\Validation\ValidationException;
+use App\Models\BookingHistory;
+use App\Models\PassengerLocation;
 
 class OperatorWebController extends Controller
 {
     public function dashboard(): View
     {
-        $operatorId = auth()->id();
+        $operatorId = Auth::id();
 
         $stats = [
             'buses' => Bus::where('operator_id', $operatorId)->count(),
@@ -62,9 +68,22 @@ class OperatorWebController extends Controller
 
     public function buses(): View
     {
-        $buses = Bus::where('operator_id', auth()->id())->latest()->get();
+        $buses = Bus::where('operator_id', Auth::id())->latest()->get();
 
         return view('operator.buses', compact('buses'));
+    }
+
+    public function busStatus(): View
+    {
+        $reports = BusStatusReport::with(['bus.driver'])
+            ->whereHas('bus', fn ($query) => $query->where('operator_id', Auth::id()))
+            ->latest()
+            ->get();
+
+        $openCount = $reports->where('status', 'open')->count();
+        $resolvedCount = $reports->where('status', 'resolved')->count();
+
+        return view('operator.bus-status', compact('reports', 'openCount', 'resolvedCount'));
     }
 
     public function storeBus(Request $request): RedirectResponse
@@ -78,7 +97,7 @@ class OperatorWebController extends Controller
             'model' => ['nullable'],
         ]);
 
-        Bus::create([...$data, 'operator_id' => auth()->id()]);
+        Bus::create([...$data, 'operator_id' => Auth::id()]);
 
         return back()->with('success', 'Bus added successfully.');
     }
@@ -86,7 +105,7 @@ class OperatorWebController extends Controller
     public function routes(): View
     {
         $routes = Route::with(['originStop', 'destinationStop', 'stops'])
-            ->where('operator_id', auth()->id())
+            ->where('operator_id', Auth::id())
             ->orderByDesc('is_active')
             ->latest()
             ->get();
@@ -142,7 +161,7 @@ class OperatorWebController extends Controller
         $mapPath = $this->fetchOsrmRoadPath($stopModels);
 
         $route = Route::create([
-            'operator_id' => auth()->id(),
+            'operator_id' => Auth::id(),
             'name' => $data['name'],
             'code' => $data['code'],
             'origin_stop_id' => $stopModels->first()->id,
@@ -180,16 +199,16 @@ class OperatorWebController extends Controller
 
     public function editRoute(Route $route): View
     {
-        if ($route->operator_id !== auth()->id()) {
+        if ($route->operator_id !== Auth::id()) {
             abort(403);
         }
 
         $route->load(['stops' => fn ($q) => $q->orderBy('route_stops.sequence')]);
-        $buses = Bus::where('operator_id', auth()->id())->get();
+        $buses = Bus::where('operator_id', Auth::id())->get();
         $drivers = User::where('role', UserRole::Driver->value)->get();
         $schedules = Schedule::with(['bus', 'driver'])
             ->where('route_id', $route->id)
-            ->where('operator_id', auth()->id())
+            ->where('operator_id', Auth::id())
             ->latest('travel_date')
             ->get();
 
@@ -198,7 +217,7 @@ class OperatorWebController extends Controller
 
     public function updateRoute(Request $request, Route $route): RedirectResponse
     {
-        if ($route->operator_id !== auth()->id()) {
+        if ($route->operator_id !== Auth::id()) {
             abort(403);
         }
 
@@ -271,52 +290,91 @@ class OperatorWebController extends Controller
         return redirect()->route('operator.routes.edit', $route)->with('success', 'Route updated successfully.');
     }
 
-    public function deleteRoute(Route $route): RedirectResponse
+    public function showRouteBookings(Route $route): View
     {
-        if ($route->operator_id !== auth()->id()) {
+        if ($route->operator_id !== Auth::id()) {
             abort(403);
         }
 
-        $hasBookings = Booking::whereHas('schedule', fn ($q) => $q->where('route_id', $route->id))->exists();
+        $bookings = Booking::with(['user', 'schedule.bus', 'schedule.driver', 'originStop', 'destinationStop', 'ticket', 'payment'])
+            ->whereHas('schedule', fn ($q) => $q->where('route_id', $route->id))
+            ->latest()
+            ->paginate(20);
 
-        if ($hasBookings) {
-            $route->update(['is_active' => false]);
-
-            return redirect()->route('operator.routes')->with('success', 'Route deactivated (has existing bookings).');
-        }
-
-        $route->stops()->detach();
-        Schedule::where('route_id', $route->id)->delete();
-        $route->delete();
-
-        return redirect()->route('operator.routes')->with('success', 'Route deleted.');
+        return view('operator.route-bookings', compact('route', 'bookings'));
     }
 
-    public function updateSchedule(Request $request, Schedule $schedule): RedirectResponse
+    public function updateBookingStatus(Request $request, Booking $booking): RedirectResponse
     {
-        if ($schedule->operator_id !== auth()->id()) {
+        // Verify the booking belongs to operator's route
+        if ($booking->schedule->operator_id !== Auth::id()) {
             abort(403);
         }
 
         $data = $request->validate([
-            'route_id' => ['required', 'exists:routes,id'],
-            'bus_id' => ['required', 'exists:buses,id'],
-            'driver_id' => ['nullable', 'exists:users,id'],
-            'travel_date' => ['required', 'date'],
-            'departure_time' => ['required'],
-            'arrival_time' => ['nullable'],
-            'price' => ['required', 'numeric', 'min:100'],
-            'status' => ['required', 'in:scheduled,boarding,in_progress,delayed,completed,cancelled'],
+            'status' => ['required', 'in:confirmed,cancelled,completed,boarded'],
+            'reason' => ['nullable', 'string', 'max:500']
         ]);
 
-        $schedule->update($data);
+        $booking->update(['status' => $data['status']]);
 
-        return back()->with('success', 'Schedule updated.');
+        $statusMessage = match($data['status']) {
+            'cancelled' => 'Booking cancelled successfully',
+            'completed' => 'Booking marked as completed',
+            'confirmed' => 'Booking confirmed',
+            'boarded' => 'Passenger marked as boarded',
+        };
+
+        return back()->with('success', $statusMessage);
+    }
+
+    public function deleteRoute(Route $route): RedirectResponse
+    {
+        if ($route->operator_id !== Auth::id()) {
+            abort(403);
+        }
+
+        // Archive all bookings before deleting route
+        $bookings = Booking::with(['user', 'schedule.bus', 'schedule.driver', 'schedule.route', 'originStop', 'destinationStop'])
+            ->whereHas('schedule', fn ($q) => $q->where('route_id', $route->id))
+            ->get();
+
+        foreach ($bookings as $booking) {
+            BookingHistory::create([
+                'original_booking_reference' => $booking->reference,
+                'passenger_name' => $booking->user->name,
+                'passenger_email' => $booking->user->email,
+                'passenger_phone' => $booking->user->phone,
+                'route_name' => $booking->schedule->route->name,
+                'route_code' => $booking->schedule->route->code,
+                'origin_stop_name' => $booking->originStop->name,
+                'destination_stop_name' => $booking->destinationStop->name,
+                'amount' => $booking->amount,
+                'seat_number' => $booking->seat_number,
+                'status' => $booking->status,
+                'travel_date' => $booking->schedule->travel_date,
+                'departure_time' => $booking->schedule->departure_time,
+                'bus_plate_number' => $booking->schedule->bus?->plate_number,
+                'driver_name' => $booking->schedule->driver?->name,
+                'operator_name' => Auth::user()->name,
+                'deletion_reason' => 'Route deleted by operator',
+                'original_booking_date' => $booking->created_at,
+                'archived_at' => now(),
+            ]);
+        }
+
+        // Delete all associated data
+        $route->stops()->detach();
+        Schedule::where('route_id', $route->id)->delete();
+        $route->delete();
+
+        return redirect()->route('operator.routes')->with('success', 
+            "Route deleted successfully. {$bookings->count()} booking records have been archived for admin review.");
     }
 
     public function deleteSchedule(Schedule $schedule): RedirectResponse
     {
-        if ($schedule->operator_id !== auth()->id()) {
+        if ($schedule->operator_id !== Auth::id()) {
             abort(403);
         }
 
@@ -331,6 +389,41 @@ class OperatorWebController extends Controller
         $schedule->delete();
 
         return back()->with('success', 'Schedule deleted.');
+    }
+
+    protected function assertDriverBusAssignmentAllowed(array $data, ?Schedule $schedule = null): void
+    {
+        if (empty($data['bus_id'])) {
+            return;
+        }
+
+        $bus = Bus::find($data['bus_id']);
+        if (! $bus || $bus->status !== 'active') {
+            throw ValidationException::withMessages([
+                'bus_id' => 'This bus cannot be assigned because it is currently reported as having an issue or is not active.',
+            ]);
+        }
+
+        // Allow a driver to be assigned to multiple buses/routes simultaneously.
+        // (Business rule changed per operator request — do not block driver assignment.)
+        if (empty($data['driver_id'])) {
+            return;
+        }
+
+        $driverId = $data['driver_id'];
+        $busId = $data['bus_id'];
+
+        $conflictingBus = Schedule::where('bus_id', $busId)
+            ->when($schedule, fn ($query) => $query->where('id', '<>', $schedule->id))
+            ->whereNotNull('driver_id')
+            ->where('driver_id', '<>', $driverId)
+            ->exists();
+
+        if ($conflictingBus) {
+            throw ValidationException::withMessages([
+                'driver_id' => 'This bus is already assigned to another driver. One bus may only have one driver.',
+            ]);
+        }
     }
 
     protected function fetchOsrmRoadPath(\Illuminate\Support\Collection $stopModels): ?array
@@ -362,16 +455,16 @@ class OperatorWebController extends Controller
 
     public function schedules(): View
     {
-        $schedules = Schedule::with(['route', 'bus', 'driver'])
-            ->where('operator_id', auth()->id())
+        $schedules = Schedule::with(['route', 'bus.driver', 'driver'])
+            ->withCount('bookings')
+            ->where('operator_id', Auth::id())
             ->latest('travel_date')
             ->paginate(15);
 
-        $routes = Route::where('operator_id', auth()->id())->get();
-        $buses = Bus::where('operator_id', auth()->id())->get();
-        $drivers = User::where('role', UserRole::Driver->value)->get();
+        $routes = Route::where('operator_id', Auth::id())->get();
+        $buses = Bus::with('driver')->where('operator_id', Auth::id())->where('status', 'active')->get();
 
-        return view('operator.schedules', compact('schedules', 'routes', 'buses', 'drivers'));
+        return view('operator.schedules', compact('schedules', 'routes', 'buses'));
     }
 
     public function storeSchedule(Request $request): RedirectResponse
@@ -386,15 +479,116 @@ class OperatorWebController extends Controller
             'price' => ['required', 'numeric', 'min:100'],
         ]);
 
-        Schedule::create([...$data, 'operator_id' => auth()->id(), 'status' => 'scheduled']);
+        // Verify the bus belongs to this operator
+        $bus = Bus::where('id', $data['bus_id'])
+            ->where('operator_id', Auth::id())
+            ->first();
+        
+        if (!$bus) {
+            return back()->withErrors(['bus_id' => 'Selected bus does not belong to your fleet.'])->withInput();
+        }
 
-        return back()->with('success', 'Schedule created.');
+        // Use the bus's assigned driver if no driver specified
+        if (empty($data['driver_id']) && $bus->driver_id) {
+            $data['driver_id'] = $bus->driver_id;
+        }
+
+        // Verify the route belongs to this operator
+        $route = Route::where('id', $data['route_id'])
+            ->where('operator_id', Auth::id())
+            ->first();
+        
+        if (!$route) {
+            return back()->withErrors(['route_id' => 'Selected route does not belong to your operation.'])->withInput();
+        }
+
+        // Check if bus is already scheduled for another route on the same date
+        $existingSchedule = Schedule::where('bus_id', $data['bus_id'])
+            ->where('travel_date', $data['travel_date'])
+            ->where('operator_id', Auth::id())
+            ->whereNotIn('status', ['cancelled', 'completed']) // Ignore cancelled/completed schedules
+            ->with('route')
+            ->first();
+
+        if ($existingSchedule) {
+            return back()->withErrors([
+                'bus_id' => "This bus is already scheduled for route '{$existingSchedule->route->name}' on {$existingSchedule->travel_date->format('M d, Y')}. A bus can only be assigned to one route per day."
+            ])->withInput();
+        }
+
+        $this->assertDriverBusAssignmentAllowed($data);
+
+        Schedule::create([...$data, 'operator_id' => Auth::id(), 'status' => 'scheduled']);
+
+        return back()->with('success', 'Schedule created successfully.');
+    }
+
+    public function updateSchedule(Request $request, Schedule $schedule): RedirectResponse
+    {
+        if ($schedule->operator_id !== Auth::id()) {
+            abort(403);
+        }
+
+        $data = $request->validate([
+            'route_id' => ['required', 'exists:routes,id'],
+            'bus_id' => ['required', 'exists:buses,id'],
+            'driver_id' => ['nullable', 'exists:users,id'],
+            'travel_date' => ['required', 'date'],
+            'departure_time' => ['required'],
+            'arrival_time' => ['nullable'],
+            'price' => ['required', 'numeric', 'min:100'],
+            'status' => ['required', 'in:scheduled,boarding,in_progress,delayed,completed,cancelled'],
+        ]);
+
+        // Verify the bus belongs to this operator
+        $bus = Bus::where('id', $data['bus_id'])
+            ->where('operator_id', Auth::id())
+            ->first();
+        
+        if (!$bus) {
+            return back()->withErrors(['bus_id' => 'Selected bus does not belong to your fleet.'])->withInput();
+        }
+
+        // Use the bus's assigned driver if no driver specified
+        if (empty($data['driver_id']) && $bus->driver_id) {
+            $data['driver_id'] = $bus->driver_id;
+        }
+
+        // Verify the route belongs to this operator
+        $route = Route::where('id', $data['route_id'])
+            ->where('operator_id', Auth::id())
+            ->first();
+        
+        if (!$route) {
+            return back()->withErrors(['route_id' => 'Selected route does not belong to your operation.'])->withInput();
+        }
+
+        // Check if bus is already scheduled for another route on the same date (excluding current schedule)
+        $existingSchedule = Schedule::where('bus_id', $data['bus_id'])
+            ->where('travel_date', $data['travel_date'])
+            ->where('operator_id', Auth::id())
+            ->where('id', '!=', $schedule->id) // Exclude current schedule
+            ->whereNotIn('status', ['cancelled', 'completed']) // Ignore cancelled/completed schedules
+            ->with('route')
+            ->first();
+
+        if ($existingSchedule) {
+            return back()->withErrors([
+                'bus_id' => "This bus is already scheduled for route '{$existingSchedule->route->name}' on {$existingSchedule->travel_date->format('M d, Y')}. A bus can only be assigned to one route per day."
+            ])->withInput();
+        }
+
+        $this->assertDriverBusAssignmentAllowed($data, $schedule);
+
+        $schedule->update($data);
+
+        return back()->with('success', 'Schedule updated successfully.');
     }
 
     public function bookings(): View
     {
         $bookings = Booking::with(['user', 'schedule.route', 'schedule.bus', 'ticket', 'payment'])
-            ->whereHas('schedule', fn ($q) => $q->where('operator_id', auth()->id()))
+            ->whereHas('schedule', fn ($q) => $q->where('operator_id', Auth::id()))
             ->latest()
             ->paginate(20);
 
@@ -404,7 +598,7 @@ class OperatorWebController extends Controller
     public function payments(): View
     {
         $payments = Payment::with(['booking.user', 'booking.schedule.route'])
-            ->whereHas('booking.schedule', fn ($q) => $q->where('operator_id', auth()->id()))
+            ->whereHas('booking.schedule', fn ($q) => $q->where('operator_id', Auth::id()))
             ->latest()
             ->paginate(20);
 
@@ -414,8 +608,8 @@ class OperatorWebController extends Controller
     public function passengers(): View
     {
         $passengers = User::where('role', UserRole::Passenger->value)
-            ->whereHas('bookings.schedule', fn ($q) => $q->where('operator_id', auth()->id()))
-            ->withCount(['bookings as operator_bookings_count' => fn ($q) => $q->whereHas('schedule', fn ($s) => $s->where('operator_id', auth()->id()))])
+            ->whereHas('bookings.schedule', fn ($q) => $q->where('operator_id', Auth::id()))
+            ->withCount(['bookings as operator_bookings_count' => fn ($q) => $q->whereHas('schedule', fn ($s) => $s->where('operator_id', Auth::id()))])
             ->orderBy('name')
             ->paginate(20);
 
@@ -424,7 +618,7 @@ class OperatorWebController extends Controller
 
     public function reports(): View
     {
-        $operatorId = auth()->id();
+        $operatorId = Auth::id();
 
         $stats = [
             'confirmed_bookings' => Booking::whereHas('schedule', fn ($q) => $q->where('operator_id', $operatorId))->where('status', 'confirmed')->count(),

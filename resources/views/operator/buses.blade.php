@@ -15,17 +15,8 @@
 <h1>Manage Buses</h1>
 <div class="kbs-grid kbs-grid-2">
     <div class="kbs-card kbs-form">
-        <h3>Add Bus</h3>
-        <form method="POST" action="{{ route('operator.buses.store') }}">
-            @csrf
-            <label>Plate Number</label><input name="plate_number" required>
-            <label>Fleet Number</label><input name="fleet_number">
-            <label>Capacity</label><input type="number" name="capacity" value="40" required>
-            <label>Rows</label><input type="number" name="rows" value="10" required>
-            <label>Seats per Row</label><input type="number" name="seats_per_row" value="4" required>
-            <label>Model</label><input name="model">
-            <button class="kbs-btn kbs-btn-primary">Add Bus</button>
-        </form>
+        <h3>Bus management is reserved for admins</h3>
+        <p>Only administrators can add or assign new buses. Your operator dashboard can still display and manage existing buses owned by your operator account.</p>
     </div>
     <div class="kbs-card">
         <table class="kbs-table">

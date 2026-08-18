@@ -8,6 +8,7 @@ use App\Models\Schedule;
 use App\Models\TripReport;
 use App\Services\BusTrackingService;
 use App\Services\TicketService;
+use App\Services\TripOperationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use InvalidArgumentException;
@@ -26,12 +27,47 @@ class DriverController extends Controller
         return response()->json($trips);
     }
 
-    public function startTrip(Request $request, Schedule $schedule): JsonResponse
+    public function startTrip(Request $request, Schedule $schedule, TripOperationService $trips): JsonResponse
     {
         $this->authorizeTrip($request, $schedule);
-        $schedule->update(['status' => 'in_progress', 'started_at' => now()]);
+
+        try {
+            $trips->startTrip($schedule);
+        } catch (InvalidArgumentException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        return response()->json($schedule->fresh(['route.stops', 'bus']));
+    }
+
+    public function arrived(Request $request, Schedule $schedule, TripOperationService $trips): JsonResponse
+    {
+        $this->authorizeTrip($request, $schedule);
+
+        try {
+            $schedule = $trips->markArrived($schedule);
+        } catch (InvalidArgumentException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
 
         return response()->json($schedule);
+    }
+
+    public function returnTrip(Request $request, Schedule $schedule, TripOperationService $trips): JsonResponse
+    {
+        $this->authorizeTrip($request, $schedule);
+
+        try {
+            $schedule = $trips->startReturnTrip($schedule);
+        } catch (InvalidArgumentException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        return response()->json([
+            'schedule' => $schedule,
+            'display_route' => $schedule->displayRouteName(),
+            'stops' => $schedule->orderedStopsForLeg()->pluck('name'),
+        ]);
     }
 
     public function endTrip(Request $request, Schedule $schedule): JsonResponse

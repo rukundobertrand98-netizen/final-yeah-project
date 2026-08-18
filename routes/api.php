@@ -10,6 +10,7 @@ use App\Http\Controllers\Api\RouteSearchController;
 use App\Http\Controllers\Api\TicketQrController;
 use App\Http\Controllers\Api\TrackingController;
 use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\Api\LocationTrackingController;
 
 Route::prefix('v1')->group(function () {
     Route::post('/auth/register', [AuthController::class, 'register']);
@@ -31,13 +32,21 @@ Route::prefix('v1')->group(function () {
         Route::get('/tracking/schedules/{schedule}', [TrackingController::class, 'scheduleLocation']);
         Route::get('/tracking/bookings/{booking}', [TrackingController::class, 'myTrip']);
         Route::get('/alerts', [TrackingController::class, 'alerts']);
+        Route::get('/passenger/nearby-buses', [TrackingController::class, 'nearbyBuses']);
         Route::patch('/alerts/{alert}/read', [TrackingController::class, 'markAlertRead']);
 
         Route::get('/tickets/{ticket}/qr', [TicketQrController::class, 'show']);
 
+        // Location Tracking
+        Route::post('/location/update', [LocationTrackingController::class, 'updatePassengerLocation']);
+        Route::get('/location/my', [LocationTrackingController::class, 'getPassengerLocation']);
+        Route::get('/bookings/{booking}/track-bus', [LocationTrackingController::class, 'trackBusForBooking']);
+
         Route::middleware('role:driver')->prefix('driver')->group(function () {
             Route::get('/trips', [DriverController::class, 'trips']);
             Route::post('/trips/{schedule}/start', [DriverController::class, 'startTrip']);
+            Route::post('/trips/{schedule}/arrived', [DriverController::class, 'arrived']);
+            Route::post('/trips/{schedule}/return', [DriverController::class, 'returnTrip']);
             Route::post('/trips/{schedule}/end', [DriverController::class, 'endTrip']);
             Route::patch('/trips/{schedule}/status', [DriverController::class, 'updateStatus']);
             Route::post('/trips/{schedule}/report', [DriverController::class, 'report']);
@@ -49,7 +58,6 @@ Route::prefix('v1')->group(function () {
 
         Route::middleware('role:operator')->prefix('operator')->group(function () {
             Route::get('/buses', [OperatorController::class, 'buses']);
-            Route::post('/buses', [OperatorController::class, 'storeBus']);
             Route::get('/routes', [OperatorController::class, 'routes']);
             Route::post('/routes', [OperatorController::class, 'storeRoute']);
             Route::get('/schedules', [OperatorController::class, 'schedules']);
@@ -69,6 +77,9 @@ Route::prefix('v1')->group(function () {
             Route::get('/payments', [AdminController::class, 'payments']);
             Route::get('/complaints', [AdminController::class, 'complaints']);
             Route::patch('/complaints/{complaint}', [AdminController::class, 'resolveComplaint']);
+            
+            // Admin Location Tracking
+            Route::get('/locations/all', [LocationTrackingController::class, 'getAllPassengerLocations']);
         });
     });
 });

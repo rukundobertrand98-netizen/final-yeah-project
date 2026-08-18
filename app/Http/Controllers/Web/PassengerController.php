@@ -11,12 +11,14 @@ use App\Models\Stop;
 use App\Services\BookingService;
 use App\Services\BusTrackingService;
 use App\Services\MtnMomoService;
+use App\Services\NearbyBusService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\View\View;
 use InvalidArgumentException;
+use App\Models\PassengerLocation;
 
 class PassengerController extends Controller
 {
@@ -37,6 +39,19 @@ class PassengerController extends Controller
             ->get();
 
         return view('passenger.dashboard', compact('bookings', 'alerts'));
+    }
+
+    public function nearbyBusesData(Request $request, NearbyBusService $nearby): JsonResponse
+    {
+        $data = $request->validate([
+            'latitude' => ['required', 'numeric'],
+            'longitude' => ['required', 'numeric'],
+        ]);
+
+        return response()->json($nearby->busesNearPassenger(
+            (float) $data['latitude'],
+            (float) $data['longitude']
+        ));
     }
 
     public function alerts(): \Illuminate\Http\JsonResponse
@@ -85,27 +100,20 @@ class PassengerController extends Controller
             $selectedDestination = (int) $request->destination_stop_id;
 
             $schedules = Schedule::with([
-                'route.originStop', 
-                'route.destinationStop', 
-                'route.stops' => fn($q) => $q->orderBy('route_stops.sequence'), 
-                'bus'
+                'route.originStop',
+                'route.destinationStop',
+                'route.stops' => fn ($q) => $q->orderBy('route_stops.sequence'),
+                'bus',
             ])
-                ->whereHas('route.stops', fn ($q) => $q->where('stops.id', $request->origin_stop_id))
-                ->whereHas('route.stops', fn ($q) => $q->where('stops.id', $request->destination_stop_id))
                 ->whereDate('travel_date', $date)
-                ->whereIn('status', ['scheduled', 'boarding'])
+                ->whereIn('status', ['scheduled', 'boarding', 'in_progress', 'delayed'])
+                ->orderByRaw("CASE status WHEN 'in_progress' THEN 0 WHEN 'boarding' THEN 1 WHEN 'delayed' THEN 2 ELSE 3 END")
                 ->orderBy('departure_time')
                 ->get()
                 ->filter(function (Schedule $schedule) use ($selectedOrigin, $selectedDestination, $requestedSeats) {
-                    $origin = $schedule->route->stops->firstWhere('id', $selectedOrigin);
-                    $destination = $schedule->route->stops->firstWhere('id', $selectedDestination);
+                    $containsStops = $schedule->stopsConnectInDirection($selectedOrigin, $selectedDestination);
 
-                    if (! $origin || ! $destination) {
-                        return false;
-                    }
-
-                    return (int) $origin->pivot->sequence < (int) $destination->pivot->sequence
-                        && $schedule->availableSeatCount() >= $requestedSeats;
+                    return $containsStops && $schedule->availableSeatCount() >= $requestedSeats;
                 })
                 ->values();
         }
@@ -115,15 +123,19 @@ class PassengerController extends Controller
 
     public function book(Schedule $schedule, Request $request): View
     {
-        $schedule->load('route.stops');
+        $schedule->load('route.stops', 'bus');
+        $pendingCutoff = now()->subMinutes((int) config('kbs.booking.pending_hold_minutes', 15));
         $reserved = $schedule->bookings()
+            ->where('leg_number', $schedule->leg_number)
             ->where('status', 'pending')
+            ->where('created_at', '>=', $pendingCutoff)
             ->pluck('seat_number')
             ->flatMap(fn (string $seats) => array_map('trim', explode(',', $seats)))
             ->filter()
             ->values()
             ->all();
         $booked = $schedule->bookings()
+            ->where('leg_number', $schedule->leg_number)
             ->whereIn('status', ['confirmed', 'boarded'])
             ->pluck('seat_number')
             ->flatMap(fn (string $seats) => array_map('trim', explode(',', $seats)))
@@ -132,7 +144,7 @@ class PassengerController extends Controller
             ->all();
         $occupied = array_values(array_unique([...$reserved, ...$booked]));
         $seats = array_diff($schedule->bus->seatLabels(), $occupied);
-        $stops = $schedule->route->stops->sortBy('pivot.sequence')->values();
+        $stops = $schedule->orderedStopsForLeg();
         $selectedOrigin = $request->integer('origin_stop_id') ?: null;
         $selectedDestination = $request->integer('destination_stop_id') ?: null;
         $requestedSeats = max(1, $request->integer('seats') ?: 1);
@@ -246,8 +258,22 @@ class PassengerController extends Controller
     public function trackData(Booking $booking, BusTrackingService $tracking): JsonResponse
     {
         $this->authorizeBooking($booking);
+        $booking->load(['user']);
 
         return response()->json($tracking->buildBookingTracking($booking));
+    }
+
+    public function arrived(Booking $booking): RedirectResponse
+    {
+        $this->authorizeBooking($booking);
+
+        if (! in_array($booking->status, ['confirmed', 'boarded'], true)) {
+            return back()->withErrors(['booking' => 'This booking cannot be marked as arrived from its current status.']);
+        }
+
+        $booking->update(['status' => 'completed']);
+
+        return back()->with('success', 'Thank you — your arrival has been recorded and the seat is now freed.');
     }
 
     public function bookings(): View
@@ -270,6 +296,35 @@ class PassengerController extends Controller
             && $b->schedule->travel_date->greaterThanOrEqualTo(today()));
 
         return view('passenger.bookings', compact('bookings', 'trackableBooking'));
+    }
+
+    public function myLocation(): View
+    {
+        return view('passenger.my-location');
+    }
+
+    public function trackMyBuses(): View
+    {
+        /** @var User $user */
+        $user = Auth::user();
+        
+        // Get active bookings for tracking buses
+        $activeBookings = $user->bookings()
+            ->with([
+                'schedule.route',
+                'schedule.bus',
+                'schedule.latestLocation',
+                'originStop',
+                'destinationStop'
+            ])
+            ->whereIn('status', ['confirmed', 'boarded'])
+            ->whereHas('schedule', function($q) {
+                $q->whereDate('travel_date', '>=', today())
+                  ->whereIn('status', ['scheduled', 'boarding', 'in_progress']);
+            })
+            ->get();
+
+        return view('passenger.track-buses', compact('activeBookings'));
     }
 
     protected function authorizeBooking(Booking $booking): void

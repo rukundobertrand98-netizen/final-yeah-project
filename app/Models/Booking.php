@@ -10,7 +10,7 @@ class Booking extends Model
 {
     protected $fillable = [
         'reference', 'user_id', 'schedule_id', 'origin_stop_id',
-        'destination_stop_id', 'seat_number', 'amount', 'status', 'boarded_at',
+        'destination_stop_id', 'seat_number', 'amount', 'status', 'leg_number', 'boarded_at',
     ];
 
     protected function casts(): array

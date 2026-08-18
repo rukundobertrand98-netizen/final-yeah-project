@@ -3,9 +3,12 @@
 @section('content')
 <div class="kbs-sidebar-layout">
     <aside class="kbs-sidebar">
-        <strong style="display:block;margin-bottom:1rem;color:var(--kbs-primary)">{{ $sidebarTitle ?? 'Dashboard' }}</strong>
+        <div class="kbs-sidebar-title">
+            <span>Menu</span>
+            <strong>{{ $sidebarTitle ?? 'Dashboard' }}</strong>
+        </div>
         @yield('sidebar')
     </aside>
-    <div>@yield('panel')</div>
+    <section class="kbs-panel">@yield('panel')</section>
 </div>
 @endsection

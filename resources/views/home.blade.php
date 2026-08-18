@@ -4,14 +4,14 @@
 
 @section('hero')
 <section class="kbs-hero">
-    <h1>Kigali Public Transport — Book Your KBS Bus Online</h1>
+    <h1>Kigali Public Transport - Book Your KBS Bus Online</h1>
     <p>Search routes across Kigali, choose your seat, pay with MTN MoMo, and travel with a digital QR ticket. Real-time bus tracking included.</p>
     <div style="margin-top:1.5rem;display:flex;gap:.75rem;flex-wrap:wrap">
-        <a href="{{ route('register') }}" class="kbs-btn kbs-btn-primary">Get Started</a>
+        <a href="{{ route('register') }}" class="kbs-btn kbs-btn-primary"><svg><use href="#icon-user"></use></svg>Get Started</a>
         @auth
-            <a href="{{ route('passenger.search') }}" class="kbs-btn kbs-btn-outline">Search Routes</a>
+            <a href="{{ route('passenger.search') }}" class="kbs-btn kbs-btn-outline"><svg><use href="#icon-search"></use></svg>Search Routes</a>
         @else
-            <a href="{{ route('login') }}" class="kbs-btn kbs-btn-outline">Login to Book</a>
+            <a href="{{ route('login') }}" class="kbs-btn kbs-btn-outline"><svg><use href="#icon-login"></use></svg>Login to Book</a>
         @endauth
     </div>
 </section>
@@ -32,7 +32,7 @@
             <span class="kbs-badge kbs-badge-info">{{ $route->code }}</span>
             <h3 style="margin:.5rem 0">{{ $route->name }}</h3>
             <p style="color:var(--kbs-muted);margin:0">
-                {{ $route->originStop->name }} → {{ $route->destinationStop->name }}
+                {{ $route->originStop->name }} to {{ $route->destinationStop->name }}
             </p>
         </div>
     @empty

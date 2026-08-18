@@ -44,7 +44,7 @@
             @endforeach
         </datalist>
 
-        <button type="submit" class="kbs-btn kbs-btn-primary">Search Buses</button>
+        <button type="submit" class="kbs-btn kbs-btn-primary"><svg><use href="#icon-search"></use></svg>Search Buses</button>
     </form>
 </div>
 
@@ -70,7 +70,7 @@
 <div class="kbs-card" style="padding:0;overflow:hidden;margin-bottom:1.5rem">
     <div id="searchMap" class="kbs-live-map" style="height:430px;border:0;border-radius:0"></div>
     <div style="padding:1rem;display:flex;gap:1rem;align-items:center;flex-wrap:wrap">
-        <button type="button" class="kbs-btn kbs-btn-ghost" onclick="locateUser()">Use My Location</button>
+        <button type="button" class="kbs-btn kbs-btn-ghost" onclick="locateUser()"><svg><use href="#icon-search"></use></svg>Use My Location</button>
         <span id="location-status" style="color:var(--kbs-muted)">Select stops from the form or click markers on the map.</span>
     </div>
 </div>
@@ -88,10 +88,12 @@
                 $destStop = $allRouteStops->firstWhere('id', $destId);
 
                 $routeSegmentStops = collect();
-                if ($originStop && $destStop && (int) $originStop->pivot->sequence <= (int) $destStop->pivot->sequence) {
-                    $routeSegmentStops = $allRouteStops
-                        ->filter(fn ($s) => (int) $s->pivot->sequence >= (int) $originStop->pivot->sequence
-                            && (int) $s->pivot->sequence <= (int) $destStop->pivot->sequence)
+                if ($schedule->stopsConnectInDirection($originId, $destId)) {
+                    $ordered = $schedule->orderedStopsForLeg();
+                    $fromIdx = $schedule->stopOrderIndex($originId);
+                    $toIdx = $schedule->stopOrderIndex($destId);
+                    $routeSegmentStops = $ordered
+                        ->filter(fn ($s, $idx) => $idx >= $fromIdx && $idx <= $toIdx)
                         ->values();
                 }
 
@@ -116,34 +118,77 @@
                  data-route='@json($routeCoords)'
                  data-route-stop-names='@json($routeStopNames)'
                  @if($schedule->route->map_path) data-map-path='@json($schedule->route->map_path)' @endif
-                 style="cursor:pointer;transition:border-color .2s">
-                <div>
-                    <strong>{{ $busName }}</strong><br>
-                    <span style="color:var(--kbs-muted)">
-                        Route: {{ $schedule->route->name }} - Bus {{ $schedule->bus->plate_number }}
-                    </span>
-                    <br>
-                    <span style="color:var(--kbs-muted)">
-                        @if($arrivalAtOrigin)
-                            Departure: <strong>{{ $arrivalAtOrigin->format('H:i') }}</strong>
-                        @else
-                            Departure: <strong>{{ \Illuminate\Support\Carbon::parse($schedule->departure_time)->format('H:i') }}</strong>
-                        @endif
-                        @if($arrivalAtDestination)
-                            - Estimated arrival: <strong>{{ $arrivalAtDestination->format('H:i') }}</strong>
-                        @elseif($schedule->arrival_time)
-                            - Estimated arrival: <strong>{{ \Illuminate\Support\Carbon::parse($schedule->arrival_time)->format('H:i') }}</strong>
-                        @endif
-                        @if($travelDuration)
-                            <br><span style="font-size: 0.9em;">⏱ Duration: <strong>{{ $travelDuration }} mins</strong></span>
-                        @endif
-                    </span>
+                 style="cursor:pointer;transition:border-color .2s; padding: 1.5rem;">
+                
+                <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 1rem;">
+                    <div style="flex: 1;">
+                        <h3 style="margin: 0; color: var(--kbs-green-dark); font-size: 1.2rem;">
+                            {{ $schedule->route->name }}
+                        </h3>
+                        <div style="margin-top: 0.3rem; font-size: 0.9rem; color: var(--kbs-muted);">
+                            {{ $schedule->route->code }} · {{ $busName }}
+                        </div>
+                    </div>
+                    <div style="text-align: right;">
+                        <div style="font-size: 1.5rem; font-weight: bold; color: var(--kbs-green-dark);">
+                            {{ number_format($schedule->price) }} RWF
+                        </div>
+                        <div style="font-size: 0.8rem; color: var(--kbs-muted);">per seat</div>
+                    </div>
                 </div>
-                <div class="kbs-result-meta">
-                    <span class="kbs-badge kbs-badge-success">{{ $availableSeats }} seats left</span>
-                    <span class="kbs-badge kbs-badge-info">{{ $schedule->status }}</span>
-                    <strong>{{ number_format($schedule->price) }} RWF</strong>
-                    <a href="{{ route('passenger.book', ['schedule' => $schedule, 'origin_stop_id' => request('origin_stop_id'), 'destination_stop_id' => request('destination_stop_id'), 'seats' => request('seats', 1)]) }}" class="kbs-btn kbs-btn-primary">Select Seats</a>
+
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; margin: 1rem 0; padding: 1rem; background: #f8fafc; border-radius: 8px;">
+                    <div>
+                        <div style="font-size: 0.8rem; color: var(--kbs-muted); text-transform: uppercase;">Departure</div>
+                        <div style="font-weight: 500; margin-top: 0.2rem;">{{ $schedule->departure_time }}</div>
+                        @if($arrivalAtOrigin && $arrivalAtOrigin->format('H:i') !== $schedule->departure_time)
+                            <div style="font-size: 0.8rem; color: var(--kbs-muted);">
+                                At pickup: {{ $arrivalAtOrigin->format('H:i') }}
+                            </div>
+                        @endif
+                    </div>
+                    <div>
+                        <div style="font-size: 0.8rem; color: var(--kbs-muted); text-transform: uppercase;">Duration</div>
+                        <div style="font-weight: 500; margin-top: 0.2rem;">
+                            @if($travelDuration)
+                                {{ floor($travelDuration / 60) }}h {{ $travelDuration % 60 }}m
+                            @else
+                                ~{{ $schedule->route->estimated_duration_minutes }} min
+                            @endif
+                        </div>
+                    </div>
+                    <div>
+                        <div style="font-size: 0.8rem; color: var(--kbs-muted); text-transform: uppercase;">Seats Left</div>
+                        <div style="font-weight: 500; margin-top: 0.2rem;">
+                            <span class="kbs-badge kbs-badge-{{ $availableSeats > 10 ? 'success' : ($availableSeats > 5 ? 'warning' : 'danger') }}">
+                                {{ $availableSeats }} / {{ $schedule->bus->capacity }}
+                            </span>
+                        </div>
+                    </div>
+                    <div>
+                        <div style="font-size: 0.8rem; color: var(--kbs-muted); text-transform: uppercase;">Status</div>
+                        <div style="margin-top: 0.2rem;">
+                            <span class="kbs-badge kbs-badge-{{ $schedule->status === 'in_progress' ? 'success' : 'info' }}">
+                                {{ $schedule->liveStatusLabel() }}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                <div style="display: flex; justify-content: space-between; align-items: center; padding-top: 1rem; border-top: 1px solid var(--kbs-border);">
+                    <div>
+                        <div style="font-size: 0.9rem;">
+                            <strong>From:</strong> {{ $originStop->name ?? request('origin_stop_id') }}
+                        </div>
+                        <div style="font-size: 0.9rem;">
+                            <strong>To:</strong> {{ $destStop->name ?? request('destination_stop_id') }}
+                        </div>
+                    </div>
+                    <a href="{{ route('passenger.book', ['schedule' => $schedule, 'origin_stop_id' => request('origin_stop_id'), 'destination_stop_id' => request('destination_stop_id'), 'seats' => request('seats', 1)]) }}" 
+                       class="kbs-btn kbs-btn-primary"
+                       onclick="event.stopPropagation();">
+                        <svg><use href="#icon-ticket"></use></svg>Select Seats
+                    </a>
                 </div>
             </div>
         @endforeach

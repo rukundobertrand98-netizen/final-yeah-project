@@ -20,6 +20,12 @@
 @once
 @push('head')
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+<style>
+.bus-pointer-marker {
+    background: transparent !important;
+    border: none !important;
+}
+</style>
 @endpush
 @push('scripts')
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
@@ -35,15 +41,17 @@
     if (!dataUrl) return;
 
     let map, layers = {}, pollTimer;
+    let passengerMarker = null;
 
     function initMap(center) {
         const el = document.getElementById(mapId);
         if (!el || map) return;
-        map = L.map(mapId).setView(center, 13);
+        map = L.map(mapId).setView(center, 14);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             maxZoom: 18,
             attribution: '&copy; OpenStreetMap'
         }).addTo(map);
+        console.log('🗺️ Map initialized');
     }
 
     function marker(lat, lng, options) {
@@ -139,9 +147,45 @@
         });
 
         if (data.bus) {
-            layers.bus = marker(data.bus.latitude, data.bus.longitude, {
-                radius: 12, color: '#f4b400', fillColor: '#f4b400', fillOpacity: 1, weight: 3
-            }).bindPopup(`<b>KBS Bus</b><br>Updated: ${new Date(data.bus.recorded_at).toLocaleTimeString()}`).addTo(map);
+            // Create a prominent bus location marker with pointer icon
+            const busIcon = L.divIcon({
+                html: `
+                    <div style="position: relative; width: 44px; height: 44px;">
+                        <svg width="44" height="44" viewBox="0 0 44 44" style="filter: drop-shadow(0 3px 6px rgba(0,0,0,0.4));">
+                            <path d="M22 2 C13 2 7 9 7 17 C7 25 22 42 22 42 C22 42 37 25 37 17 C37 9 31 2 22 2 Z" 
+                                  fill="#16a34a" 
+                                  stroke="#ffffff" 
+                                  stroke-width="3"/>
+                            <circle cx="22" cy="17" r="7" fill="#ffffff"/>
+                        </svg>
+                        <div style="
+                            position: absolute;
+                            top: 45%;
+                            left: 50%;
+                            transform: translate(-50%, -50%);
+                            font-size: 14px;
+                        ">🚌</div>
+                    </div>
+                `,
+                className: 'bus-pointer-marker',
+                iconSize: [44, 44],
+                iconAnchor: [22, 44],
+                popupAnchor: [0, -44]
+            });
+
+            layers.bus = L.marker([data.bus.latitude, data.bus.longitude], { icon: busIcon })
+                .bindPopup(`
+                    <div style="min-width: 180px; padding: 8px;">
+                        <h4 style="margin: 0 0 8px; color: #16a34a;">🚌 Your Booked Bus</h4>
+                        <p style="margin: 4px 0; font-size: 0.9rem;"><strong>Last Updated:</strong><br>${new Date(data.bus.recorded_at).toLocaleTimeString()}</p>
+                        ${data.bus.speed_kmh ? `<p style="margin: 4px 0; font-size: 0.9rem;"><strong>Speed:</strong> ${data.bus.speed_kmh} km/h</p>` : ''}
+                        ${data.distance_to_departure_km ? `<p style="margin: 4px 0; font-size: 0.9rem;"><strong>Distance to pickup:</strong> ${data.distance_to_departure_km} km</p>` : ''}
+                        ${data.approaching_pickup ? `<p style="margin: 8px 0; color: #16a34a; font-weight: 500;">✅ Bus is approaching your pickup stop!</p>` : ''}
+                    </div>
+                `)
+                .addTo(map);
+            
+            console.log('🚌 Bus marker added at:', data.bus.latitude, data.bus.longitude);
         }
 
         if (data.nearest_stop && data.bus) {
@@ -158,6 +202,25 @@
         if (bounds.length) map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
 
         updateStatus(data);
+        // Update passenger marker from server-provided location if available
+        if (data.passenger_location) {
+            try {
+                const lat = data.passenger_location.latitude;
+                const lng = data.passenger_location.longitude;
+                const info = [];
+                if (data.passenger_location.last_updated) info.push(`Updated: ${new Date(data.passenger_location.last_updated).toLocaleTimeString()}`);
+                if (data.passenger_location.address) info.push(data.passenger_location.address);
+
+                if (!passengerMarker) {
+                    passengerMarker = L.circleMarker([lat, lng], {
+                        radius: 9, color: '#fff', fillColor: '#c0392b', fillOpacity: 1, weight: 2
+                    }).bindPopup(`<b>Your reported location</b><br>${info.join('<br>')}`).addTo(map);
+                } else if (passengerMarker && passengerMarker.setLatLng) {
+                    passengerMarker.setLatLng([lat, lng]);
+                    passengerMarker.bindPopup(`<b>Your reported location</b><br>${info.join('<br>')}`);
+                }
+            } catch (e) { /* ignore marker errors */ }
+        }
     }
 
     async function fetchAndRender() {
@@ -171,6 +234,23 @@
     document.addEventListener('DOMContentLoaded', () => {
         fetchAndRender();
         pollTimer = setInterval(fetchAndRender, pollMs);
+        // Show passenger current location marker if browser supports geolocation
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition((pos) => {
+                try {
+                    const lat = pos.coords.latitude;
+                    const lng = pos.coords.longitude;
+                    // create or move marker
+                    if (!passengerMarker && typeof map !== 'undefined') {
+                        passengerMarker = L.circleMarker([lat, lng], {
+                            radius: 9, color: '#fff', fillColor: '#c0392b', fillOpacity: 1, weight: 2
+                        }).bindPopup('<b>Your location</b>').addTo(map);
+                    } else if (passengerMarker && passengerMarker.setLatLng) {
+                        passengerMarker.setLatLng([lat, lng]);
+                    }
+                } catch (e) { /* noop */ }
+            }, () => { /* ignore location errors */ }, { enableHighAccuracy: true });
+        }
     });
 
     window.addEventListener('beforeunload', () => clearInterval(pollTimer));

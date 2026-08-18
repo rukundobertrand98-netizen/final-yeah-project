@@ -7,7 +7,9 @@ use App\Http\Controllers\Controller;
 use App\Models\Booking;
 use App\Models\Complaint;
 use App\Models\Payment;
+use App\Models\Route as BusRoute;
 use App\Models\Schedule;
+use App\Models\Stop;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -58,14 +60,51 @@ class AdminController extends Controller
         ]);
     }
 
-    public function monitorBuses(): JsonResponse
+    public function monitorBuses(Request $request): JsonResponse
     {
-        $trips = Schedule::with(['bus', 'route', 'latestLocation.nearestStop', 'driver'])
-            ->whereIn('status', ['boarding', 'in_progress', 'delayed'])
-            ->whereDate('travel_date', today())
-            ->get();
+        $activeStatuses = ['scheduled', 'boarding', 'in_progress', 'delayed'];
+        $selectedRouteId = $request->integer('route_id');
 
-        return response()->json($trips);
+        $trips = Schedule::with(['bus', 'route', 'latestLocation.nearestStop', 'driver'])
+            ->whereIn('status', $activeStatuses)
+            ->when($selectedRouteId, fn ($query) => $query->where('route_id', $selectedRouteId))
+            ->latest()
+            ->get()
+            ->map(fn (Schedule $trip) => [
+                'id' => $trip->id,
+                'plate_number' => $trip->bus?->plate_number,
+                'route_id' => $trip->route_id,
+                'route' => $trip->route?->name,
+                'driver' => $trip->driver?->name,
+                'status' => $trip->status,
+                'latitude' => $trip->latestLocation?->latitude,
+                'longitude' => $trip->latestLocation?->longitude,
+                'speed_kmh' => $trip->latestLocation?->speed_kmh,
+                'heading' => $trip->latestLocation?->heading,
+                'nearest_stop' => $trip->latestLocation?->nearestStop?->name,
+                'recorded_at' => $trip->latestLocation?->recorded_at?->toIso8601String(),
+                'gps_age_seconds' => $trip->latestLocation?->recorded_at?->diffInSeconds(now()),
+            ]);
+
+        $route = $selectedRouteId
+            ? BusRoute::with(['originStop', 'destinationStop', 'stops'])->find($selectedRouteId)
+            : null;
+
+        return response()->json([
+            'trips' => $trips,
+            'route' => $route ? [
+                'id' => $route->id,
+                'name' => $route->name,
+                'origin' => $route->originStop?->name,
+                'destination' => $route->destinationStop?->name,
+                'stops' => $route->stops->map(fn (Stop $stop) => [
+                    'id' => $stop->id,
+                    'name' => $stop->name,
+                    'latitude' => (float) $stop->latitude,
+                    'longitude' => (float) $stop->longitude,
+                ])->values(),
+            ] : null,
+        ]);
     }
 
     public function payments(): JsonResponse

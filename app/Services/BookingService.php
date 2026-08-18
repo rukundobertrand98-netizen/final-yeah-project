@@ -40,22 +40,21 @@ class BookingService
             }
         }
 
-        $schedule->loadMissing('route.stops', 'bus');
-        $origin = $schedule->route->stops->firstWhere('id', $originStopId);
-        $destination = $schedule->route->stops->firstWhere('id', $destinationStopId);
-
-        if (! $origin || ! $destination) {
-            throw new InvalidArgumentException('Selected stops are not on this route.');
+        if (! in_array($schedule->status, ['scheduled', 'boarding', 'in_progress', 'delayed'], true)) {
+            throw new InvalidArgumentException('This bus is not accepting bookings right now.');
         }
 
-        if ((int) $origin->pivot->sequence >= (int) $destination->pivot->sequence) {
-            throw new InvalidArgumentException('Destination must be after your origin on this route.');
+        $schedule->loadMissing('route.stops', 'bus');
+
+        if (! $schedule->stopsConnectInDirection($originStopId, $destinationStopId)) {
+            throw new InvalidArgumentException('Destination must be after your pickup on the current trip direction.');
         }
 
         return DB::transaction(function () use ($passenger, $schedule, $originStopId, $destinationStopId, $requestedSeats) {
             $lockedSchedule = Schedule::with('bus')->lockForUpdate()->findOrFail($schedule->id);
             $pendingCutoff = now()->subMinutes((int) config('kbs.booking.pending_hold_minutes', 15));
             $occupied = Booking::where('schedule_id', $lockedSchedule->id)
+                ->where('leg_number', $lockedSchedule->leg_number)
                 ->where(function ($q) use ($pendingCutoff) {
                     $q->whereIn('status', ['confirmed', 'boarded'])
                         ->orWhere(function ($sq) use ($pendingCutoff) {
@@ -84,6 +83,7 @@ class BookingService
                 'seat_number' => implode(', ', $requestedSeats),
                 'amount' => $lockedSchedule->price * count($requestedSeats),
                 'status' => 'pending',
+                'leg_number' => $lockedSchedule->leg_number,
             ]);
 
             $this->ticketService->issueForBooking($booking);
